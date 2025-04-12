@@ -1,0 +1,21 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAgent
+metadata:
+  name: vmagent
+  namespace: victoria-metrics
+spec:
+  replicaCount: 1
+  remoteWrite:
+    - url: "http://vmsingle-example-vmsingle.victoria-metrics.svc:8429/api/v1/write"
+  selectAllByDefault: true
+  serviceScrapeNamespaceSelector: {}
+  podScrapeNamespaceSelector: {}
+  probeNamespaceSelector: {}
+  staticScrapeNamespaceSelector: {}
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

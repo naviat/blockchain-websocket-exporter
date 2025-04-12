@@ -1,0 +1,23 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMSingle
+metadata:
+  name: example-vmsingle
+  namespace: victoria-metrics
+spec:
+  retentionPeriod: "1"
+  removePvcAfterDelete: true
+  storage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
+  extraArgs:
+    dedup.minScrapeInterval: 30s
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "100m"
+    limits:
+      memory: "128Mi"
+      cpu: "200m"

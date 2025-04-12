@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: websocket-exporter
+  namespace: victoria-metrics
+  labels:
+    app: websocket-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: websocket-exporter
+  template:
+    metadata:
+      labels:
+        app: websocket-exporter
+    spec:
+      containers:
+      - name: websocket-exporter
+        image: websocket-exporter:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 9095
+          name: http
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: websocket-exporter
+  namespace: victoria-metrics
+spec:
+  selector:
+    app: websocket-exporter
+  ports:
+  - port: 9095
+    targetPort: 9095
+    name: http
+  type: ClusterIP

@@ -1,0 +1,21 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: websocket-connection-probe
+  namespace: victoria-metrics
+  labels:
+    app.kubernetes.io/name: websocket-connection-probe
+spec:
+  jobName: websocket-connection-monitoring
+  vmProberSpec:
+    url: websocket-exporter.victoria-metrics.svc:9095
+    path: /probe
+  interval: 30s
+  targets:
+    staticConfig:
+      targets:
+      - wss://bsc-websocket-endpoint/token
+      - wss://eth-websocket-endpoint/token
+      - wss://polygon-websocket-endpoint/token
+      labels:
+        service: blockchain-nodes
