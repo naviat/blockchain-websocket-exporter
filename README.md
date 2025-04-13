@@ -91,7 +91,7 @@ curl "http://localhost:9095/probe?target=wss://your-blockchain-node.example.com/
 
 The response will include metrics about the probe:
 
-```
+```config
 # HELP probe_success Displays whether or not the probe was a success
 # TYPE probe_success gauge
 probe_success 1
