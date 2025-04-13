@@ -379,6 +379,8 @@ data:
 
 Create a dashboard configuration for Grafana:
 
+![img](./image.png)
+
 ```yaml
 # grafana-dashboard-config.yaml
 apiVersion: v1
@@ -794,7 +796,8 @@ kubectl port-forward svc/vmsingle-example-vmsingle -n victoria-metrics 8429:8429
 kubectl port-forward svc/grafana -n victoria-metrics 3000:3000
 ```
 
-Access Grafana at http://localhost:3000 with the following credentials:
+Access Grafana at <http://localhost:3000> with the following credentials:
+
 - Username: admin
 - Password: admin
 
@@ -811,7 +814,7 @@ After setting up the environment, you can observe the following metrics in Grafa
 
 ### Common Issues
 
-1. **ImagePullBackOff Error**: 
+1. **ImagePullBackOff Error**:
    - Solution: Make sure to load the Docker image into the kind cluster using `kind load docker-image`
 
 2. **VMAgent Not Discovering Targets**:
