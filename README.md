@@ -169,7 +169,7 @@ spec:
         severity: critical
       annotations:
         summary: "WebSocket connection to {{ $labels.instance }} is down"
-        
+
     - alert: WebSocketHighConnectionLatency
       expr: probe_websocket_connection_duration_seconds{job="websocket-connection-monitoring"} > 0.5
       for: 5m

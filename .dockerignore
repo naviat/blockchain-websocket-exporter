@@ -3,3 +3,6 @@
 *.md
 *.log
 *.lock
+coverage.txt
+coverage.html
+coverage.out

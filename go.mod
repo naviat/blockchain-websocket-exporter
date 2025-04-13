@@ -1,6 +1,6 @@
 module github.com/naviat/websocket-exporter
 
-go 1.24.1
+go 1.24.2
 
 require (
 	github.com/gorilla/websocket v1.5.3
@@ -12,9 +12,9 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/prometheus/client_model v0.6.1 // indirect
-	github.com/prometheus/common v0.62.0 // indirect
-	github.com/prometheus/procfs v0.15.1 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	google.golang.org/protobuf v1.36.5 // indirect
+	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/common v0.63.0 // indirect
+	github.com/prometheus/procfs v0.16.0 // indirect
+	golang.org/x/sys v0.32.0 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 )

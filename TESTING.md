@@ -101,7 +101,7 @@ spec:
         severity: critical
       annotations:
         summary: "WebSocket endpoint {{ $labels.instance }} is down"
-        
+
     - alert: WebSocketHighConnectionLatency
       expr: probe_websocket_connection_duration_seconds{job="websocket-connection-monitoring"} > 1
       for: 5m

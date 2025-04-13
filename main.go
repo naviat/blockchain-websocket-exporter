@@ -117,7 +117,12 @@ func probeWebSocket(ctx context.Context, target string) bool {
 		}
 		return false
 	}
-	defer c.Close()
+	defer func() {
+		err := c.Close()
+		if err != nil {
+			log.Printf("Error closing connection: %v", err)
+		}
+	}()
 
 	// Record connection metrics
 	connectionDuration := time.Since(connectStart)
@@ -165,18 +170,17 @@ func boolToFloat64(b bool) float64 {
 	return 0
 }
 
-func main() {
-	flag.Parse()
-
+func setupServer() *http.Server {
 	if *debug {
 		log.Println("Debug logging enabled")
 	}
 
 	// Set up HTTP server
-	http.HandleFunc(*probePath, probeHandler)
-	http.Handle(*metricsPath, promhttp.Handler())
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html>
+	mux := http.NewServeMux()
+	mux.HandleFunc(*probePath, probeHandler)
+	mux.Handle(*metricsPath, promhttp.Handler())
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_, err := w.Write([]byte(`<html>
 			<head><title>WebSocket Connection Exporter</title></head>
 			<body>
 			<h1>WebSocket Connection Exporter</h1>
@@ -185,10 +189,27 @@ func main() {
 			<p>This exporter tests WebSocket connection establishment and measures connection latency.</p>
 			</body>
 			</html>`))
+		if err != nil {
+			log.Printf("Error writing response: %v", err)
+		}
 	})
 
-	// Start server
-	fmt.Fprintf(os.Stdout, "Starting WebSocket Connection Exporter on %s\n", *listenAddress)
-	fmt.Fprintf(os.Stdout, "Probe endpoint: %s?target=wss://example.com/path/token\n", *probePath)
-	log.Fatal(http.ListenAndServe(*listenAddress, nil))
+	// Log startup information
+	if _, err := fmt.Fprintf(os.Stdout, "Starting WebSocket Connection Exporter on %s\n", *listenAddress); err != nil {
+		log.Printf("Error writing to stdout: %v", err)
+	}
+	if _, err := fmt.Fprintf(os.Stdout, "Probe endpoint: %s?target=wss://example.com/path/token\n", *probePath); err != nil {
+		log.Printf("Error writing to stdout: %v", err)
+	}
+
+	return &http.Server{
+		Addr:    *listenAddress,
+		Handler: mux,
+	}
+}
+
+func main() {
+	flag.Parse()
+	server := setupServer()
+	log.Fatal(server.ListenAndServe())
 }
