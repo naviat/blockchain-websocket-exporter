@@ -111,16 +111,6 @@ spec:
         summary: "WebSocket connection latency high for {{ $labels.instance }}"
 ```
 
-## Debugging
-
-Enable debug logging with the `--debug` flag:
-
-```bash
-./websocket-connection-exporter --debug
-```
-
-This will provide detailed logs about connection attempts.
-
 ## Benefits of This Approach
 
 - **Simplicity**: Focuses only on connection establishment

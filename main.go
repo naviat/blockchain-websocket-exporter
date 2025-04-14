@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -15,16 +14,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Configuration options
 var (
-	listenAddress = flag.String("web.listen-address", ":9095", "Address to listen on for telemetry")
-	metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
-	probePath     = flag.String("web.probe-path", "/probe", "Path under which to expose the probe endpoint")
-	timeout       = flag.Duration("timeout", 10*time.Second, "Timeout for probe")
-	debug         = flag.Bool("debug", false, "Enable debug logging")
+	webListenAddress = flag.String("web.listen-address", ":9095", "Address to listen on")
+	webTelemetryPath = flag.String("web.telemetry-path", "/metrics", "Path for exporter metrics")
+	webProbePath     = flag.String("web.probe-path", "/probe", "Path for probe endpoint")
+	timeout          = flag.Duration("timeout", 10*time.Second, "Probe timeout")
 )
 
-// Prometheus metrics
 var (
 	websocketUp = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "probe_websocket_up",
@@ -48,21 +44,13 @@ var (
 )
 
 func init() {
-	// Register metrics
 	prometheus.MustRegister(websocketUp)
 	prometheus.MustRegister(websocketConnectionDuration)
 	prometheus.MustRegister(probeDuration)
 	prometheus.MustRegister(probeSuccess)
 }
 
-// debugLog only logs if debug flag is enabled
-func debugLog(format string, v ...interface{}) {
-	if *debug {
-		log.Printf(format, v...)
-	}
-}
-
-func probeWebSocket(ctx context.Context, target string) bool {
+func probeWebSocket(target string) bool {
 	probeStart := time.Now()
 	success := false
 	defer func() {
@@ -70,57 +58,44 @@ func probeWebSocket(ctx context.Context, target string) bool {
 		probeSuccess.Set(boolToFloat64(success))
 	}()
 
-	// Reset metrics for this probe
 	websocketUp.Set(0)
 	websocketConnectionDuration.Set(0)
 
-	// Parse URL
 	targetURL, err := url.Parse(target)
 	if err != nil {
-		log.Printf("Invalid target URL %s: %v", target, err)
+		fmt.Printf("Invalid target URL %s: %v\n", target, err)
 		return false
-	}
-
-	// Set default scheme if missing
-	if targetURL.Scheme == "" {
-		targetURL.Scheme = "ws"
 	}
 
 	// Ensure URL uses ws:// or wss:// scheme
 	if targetURL.Scheme != "ws" && targetURL.Scheme != "wss" {
-		log.Printf("Invalid URL scheme %s, must be ws or wss", targetURL.Scheme)
+		fmt.Printf("Invalid URL scheme %s, must be ws or wss\n", targetURL.Scheme)
 		return false
 	}
 
 	// Create context with timeout
-	ctxTimeout, cancel := context.WithTimeout(ctx, *timeout)
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	// Set up connection
 	dialer := websocket.Dialer{
 		HandshakeTimeout: *timeout,
 	}
 
-	// Log connection attempt
-	debugLog("Connecting to %s", targetURL.String())
-
-	// Measure connection time
 	connectStart := time.Now()
 
-	// Connect to WebSocket server
 	c, resp, err := dialer.DialContext(ctxTimeout, targetURL.String(), nil)
 	if err != nil {
 		if resp != nil {
-			log.Printf("Failed to connect to %s: %v (HTTP status: %d)", targetURL.String(), err, resp.StatusCode)
+			fmt.Printf("Failed to connect to %s: %v (HTTP status: %d)\n", targetURL.String(), err, resp.StatusCode)
 		} else {
-			log.Printf("Failed to connect to %s: %v", targetURL.String(), err)
+			fmt.Printf("Failed to connect to %s: %v\n", targetURL.String(), err)
 		}
 		return false
 	}
 	defer func() {
 		err := c.Close()
 		if err != nil {
-			log.Printf("Error closing connection: %v", err)
+			fmt.Printf("Error closing connection: %v\n", err)
 		}
 	}()
 
@@ -128,7 +103,7 @@ func probeWebSocket(ctx context.Context, target string) bool {
 	connectionDuration := time.Since(connectStart)
 	websocketConnectionDuration.Set(connectionDuration.Seconds())
 	websocketUp.Set(1)
-	debugLog("Connected to %s in %s", targetURL.String(), connectionDuration)
+	fmt.Printf("Connected to %s in %s\n", targetURL.String(), connectionDuration)
 
 	// Consider the probe successful if the connection was established
 	success = true
@@ -142,8 +117,6 @@ func probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	debugLog("Received probe request for target: %s", target)
-
 	// Create a fresh registry for this probe
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(websocketUp)
@@ -151,12 +124,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request) {
 	registry.MustRegister(probeDuration)
 	registry.MustRegister(probeSuccess)
 
-	// Probe the target
-	start := time.Now()
-	success := probeWebSocket(r.Context(), target)
-	duration := time.Since(start)
-
-	debugLog("Probe of %s completed in %s, success: %v", target, duration, success)
+	probeWebSocket(target)
 
 	// Return metrics
 	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
@@ -170,46 +138,27 @@ func boolToFloat64(b bool) float64 {
 	return 0
 }
 
-func setupServer() *http.Server {
-	if *debug {
-		log.Println("Debug logging enabled")
-	}
+func main() {
+	flag.Parse()
 
-	// Set up HTTP server
-	mux := http.NewServeMux()
-	mux.HandleFunc(*probePath, probeHandler)
-	mux.Handle(*metricsPath, promhttp.Handler())
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		_, err := w.Write([]byte(`<html>
-			<head><title>WebSocket Connection Exporter</title></head>
+	// Setup HTTP server
+	http.Handle(*webTelemetryPath, promhttp.Handler())
+	http.HandleFunc(*webProbePath, probeHandler)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte(`<html>
+			<head><title>WebSocket Exporter</title></head>
 			<body>
-			<h1>WebSocket Connection Exporter</h1>
-			<p>Visit <a href="` + *metricsPath + `">Metrics</a> to see metrics.</p>
-			<p>Visit <a href="` + *probePath + `?target=wss://example.com/path/token">Probe</a> to probe a WebSocket endpoint.</p>
-			<p>This exporter tests WebSocket connection establishment and measures connection latency.</p>
+			<h1>WebSocket Exporter</h1>
+			<p><a href="` + *webProbePath + `">Probe</a></p>
+			<p><a href="` + *webTelemetryPath + `">Metrics</a></p>
 			</body>
-			</html>`))
-		if err != nil {
+			</html>`)); err != nil {
 			log.Printf("Error writing response: %v", err)
 		}
 	})
 
-	// Log startup information
-	if _, err := fmt.Fprintf(os.Stdout, "Starting WebSocket Connection Exporter on %s\n", *listenAddress); err != nil {
-		log.Printf("Error writing to stdout: %v", err)
+	log.Printf("Starting websocket exporter on %s", *webListenAddress)
+	if err := http.ListenAndServe(*webListenAddress, nil); err != nil {
+		log.Fatalf("Error starting HTTP server: %v", err)
 	}
-	if _, err := fmt.Fprintf(os.Stdout, "Probe endpoint: %s?target=wss://example.com/path/token\n", *probePath); err != nil {
-		log.Printf("Error writing to stdout: %v", err)
-	}
-
-	return &http.Server{
-		Addr:    *listenAddress,
-		Handler: mux,
-	}
-}
-
-func main() {
-	flag.Parse()
-	server := setupServer()
-	log.Fatal(server.ListenAndServe())
 }

@@ -114,12 +114,11 @@ The exporter supports several command-line flags:
 - `--web.telemetry-path` - Path for exporter metrics (default: `/metrics`)
 - `--web.probe-path` - Path for probe endpoint (default: `/probe`)
 - `--timeout` - Probe timeout (default: `10s`)
-- `--debug` - Enable debug logging (default: `false`)
 
 Example:
 
 ```bash
-./blockchain-websocket-exporter --timeout=5s --debug
+./blockchain-websocket-exporter --timeout=5s
 ```
 
 ## VMProbe Configuration

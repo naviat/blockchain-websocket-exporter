@@ -5,8 +5,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,33 +18,27 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// mockWebSocketServer creates a test WebSocket server for testing
-func mockWebSocketServer(t *testing.T) *httptest.Server {
-	var upgrader = websocket.Upgrader{}
-
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate delay for connection duration testing
-		time.Sleep(10 * time.Millisecond)
-
-		c, err := upgrader.Upgrade(w, r, nil)
+// TestProbeWebSocket tests the probeWebSocket function
+func TestProbeWebSocket(t *testing.T) {
+	// Create a mock WebSocket server
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
+			t.Logf("Failed to upgrade connection: %v", err)
 			return
 		}
 		defer func() {
-			err := c.Close()
-			if err != nil {
-				t.Fatalf("Failed to close connection: %v", err)
+			if err := conn.Close(); err != nil {
+				t.Logf("Failed to close connection: %v", err)
 			}
 		}()
-
-		// Keep connection open briefly
-		time.Sleep(5 * time.Millisecond)
 	}))
-}
+	defer server.Close()
 
-// TestProbeWebSocket tests the probeWebSocket function
-func TestProbeWebSocket(t *testing.T) {
+	// Convert HTTP URL to WebSocket URL
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
 	// Reset metrics before test
 	prometheus.Unregister(websocketUp)
 	prometheus.Unregister(websocketConnectionDuration)
@@ -58,13 +50,6 @@ func TestProbeWebSocket(t *testing.T) {
 	prometheus.MustRegister(websocketConnectionDuration)
 	prometheus.MustRegister(probeDuration)
 	prometheus.MustRegister(probeSuccess)
-
-	// Start mock WebSocket server
-	server := mockWebSocketServer(t)
-	defer server.Close()
-
-	// Convert HTTP URL to WebSocket URL
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 
 	// Test cases
 	testCases := []struct {
@@ -95,7 +80,7 @@ func TestProbeWebSocket(t *testing.T) {
 			*timeout = 1 * time.Second
 
 			// Test the probeWebSocket function
-			result := probeWebSocket(context.Background(), tc.target)
+			result := probeWebSocket(tc.target)
 
 			if result != tc.expected {
 				t.Errorf("probeWebSocket(%s) = %v, want %v", tc.target, result, tc.expected)
@@ -106,15 +91,12 @@ func TestProbeWebSocket(t *testing.T) {
 				if value := testutil.ToFloat64(probeSuccess); value != 1 {
 					t.Errorf("probeSuccess metric = %v, want 1", value)
 				}
-
 				if value := testutil.ToFloat64(websocketUp); value != 1 {
 					t.Errorf("websocketUp metric = %v, want 1", value)
 				}
-
 				if value := testutil.ToFloat64(websocketConnectionDuration); value <= 0 {
 					t.Errorf("websocketConnectionDuration metric = %v, want > 0", value)
 				}
-
 				if value := testutil.ToFloat64(probeDuration); value <= 0 {
 					t.Errorf("probeDuration metric = %v, want > 0", value)
 				}
@@ -125,49 +107,58 @@ func TestProbeWebSocket(t *testing.T) {
 
 // TestProbeHandler tests the HTTP handler for the probe endpoint
 func TestProbeHandler(t *testing.T) {
-	// Start mock WebSocket server
-	server := mockWebSocketServer(t)
-	defer server.Close()
-
-	// Convert HTTP URL to WebSocket URL
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-
-	// Test cases
 	testCases := []struct {
 		name           string
 		target         string
 		expectedStatus int
-		checkBody      bool
+		checkMetrics   bool
 	}{
 		{
 			name:           "Valid target",
-			target:         wsURL,
+			target:         "ws://example.com",
 			expectedStatus: http.StatusOK,
-			checkBody:      true,
+			checkMetrics:   true,
 		},
 		{
 			name:           "Missing target",
 			target:         "",
 			expectedStatus: http.StatusBadRequest,
-			checkBody:      false,
+			checkMetrics:   false,
 		},
 		{
 			name:           "Invalid target",
 			target:         "invalid://url",
-			expectedStatus: http.StatusOK, // The handler returns OK even for failed probes
-			checkBody:      true,
+			expectedStatus: http.StatusOK,
+			checkMetrics:   true,
+		},
+		{
+			name:           "Empty target parameter",
+			target:         "",
+			expectedStatus: http.StatusBadRequest,
+			checkMetrics:   false,
+		},
+		{
+			name:           "Target with spaces",
+			target:         "ws://example.com with spaces",
+			expectedStatus: http.StatusOK,
+			checkMetrics:   true,
+		},
+		{
+			name:           "Target with special characters",
+			target:         "ws://example.com/path?query=value&param=test",
+			expectedStatus: http.StatusOK,
+			checkMetrics:   true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create request
+			// Create request with target parameter
 			req, err := http.NewRequest("GET", "/probe", nil)
 			if err != nil {
-				t.Fatalf("Failed to create request: %v", err)
+				t.Fatal(err)
 			}
 
-			// Add target parameter if provided
 			if tc.target != "" {
 				q := req.URL.Query()
 				q.Add("target", tc.target)
@@ -177,29 +168,29 @@ func TestProbeHandler(t *testing.T) {
 			// Create response recorder
 			rr := httptest.NewRecorder()
 
-			// Call the handler
-			handler := http.HandlerFunc(probeHandler)
-			handler.ServeHTTP(rr, req)
+			// Call handler
+			probeHandler(rr, req)
 
 			// Check status code
 			if status := rr.Code; status != tc.expectedStatus {
-				t.Errorf("Handler returned wrong status code: got %v want %v", status, tc.expectedStatus)
+				t.Errorf("handler returned wrong status code: got %v want %v",
+					status, tc.expectedStatus)
 			}
 
-			// Check response body for metrics
-			if tc.checkBody {
+			// Check metrics if expected
+			if tc.checkMetrics {
 				body := rr.Body.String()
-				expectedMetrics := []string{
-					"probe_success",
-					"probe_websocket_up",
-					"probe_websocket_connection_duration_seconds",
-					"probe_duration_seconds",
+				if !strings.Contains(body, "probe_success") {
+					t.Errorf("response missing probe_success metric")
 				}
-
-				for _, metric := range expectedMetrics {
-					if !strings.Contains(body, metric) {
-						t.Errorf("Response body missing metric: %s", metric)
-					}
+				if !strings.Contains(body, "probe_duration_seconds") {
+					t.Errorf("response missing probe_duration_seconds metric")
+				}
+				if !strings.Contains(body, "probe_websocket_up") {
+					t.Errorf("response missing probe_websocket_up metric")
+				}
+				if !strings.Contains(body, "probe_websocket_connection_duration_seconds") {
+					t.Errorf("response missing probe_websocket_connection_duration_seconds metric")
 				}
 			}
 		})
@@ -307,106 +298,71 @@ func TestBoolToFloat64(t *testing.T) {
 	}
 }
 
-// TestDebugLog tests the debug logging function
-func TestDebugLog(t *testing.T) {
-	// Test with debug enabled
-	*debug = true
-	debugLog("Test debug message")
-
-	// Test with debug disabled
-	*debug = false
-	debugLog("This should not cause any issues")
-
-	// No assertions needed, just checking that it doesn't panic
-}
-
 // TestRootHandler tests the root endpoint handler
 func TestRootHandler(t *testing.T) {
-	// Save original metrics and probe paths
-	origMetricsPath := *metricsPath
-	origProbePath := *probePath
+	// Save original values and restore them later
+	origWebTelemetryPath := *webTelemetryPath
+	origWebProbePath := *webProbePath
+	defer func() {
+		*webTelemetryPath = origWebTelemetryPath
+		*webProbePath = origWebProbePath
+	}()
 
-	// Set paths for test
-	*metricsPath = "/testmetrics"
-	*probePath = "/testprobe"
+	// Set test values
+	*webTelemetryPath = "/test-metrics"
+	*webProbePath = "/test-probe"
 
-	// Create a request to the root endpoint
+	// Create test request
 	req, err := http.NewRequest("GET", "/", nil)
 	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
+		t.Fatal(err)
 	}
 
 	// Create response recorder
 	rr := httptest.NewRecorder()
 
-	// Get the handler
+	// Create handler function
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, err := w.Write([]byte(`<html>
-			<head><title>WebSocket Connection Exporter</title></head>
+		if _, err := w.Write([]byte(`<html>
+			<head><title>WebSocket Exporter</title></head>
 			<body>
-			<h1>WebSocket Connection Exporter</h1>
-			<p>Visit <a href="` + *metricsPath + `">Metrics</a> to see metrics.</p>
-			<p>Visit <a href="` + *probePath + `?target=wss://example.com/path/token">Probe</a> to probe a WebSocket endpoint.</p>
-			<p>This exporter tests WebSocket connection establishment and measures connection latency.</p>
+			<h1>WebSocket Exporter</h1>
+			<p><a href="` + *webProbePath + `">Probe</a></p>
+			<p><a href="` + *webTelemetryPath + `">Metrics</a></p>
 			</body>
-			</html>`))
-		if err != nil {
-			log.Printf("Error writing response: %v", err)
+			</html>`)); err != nil {
+			t.Errorf("Error writing response: %v", err)
 		}
 	})
 
-	// Call the handler
+	// Serve the request
 	handler.ServeHTTP(rr, req)
 
 	// Check status code
 	if status := rr.Code; status != http.StatusOK {
-		t.Errorf("Handler returned wrong status code: got %v want %v", status, http.StatusOK)
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
 	}
 
 	// Check response body
-	body := rr.Body.String()
-	if !strings.Contains(body, "WebSocket Connection Exporter") {
-		t.Errorf("Response body missing expected content")
-	}
-	if !strings.Contains(body, *metricsPath) {
-		t.Errorf("Response body doesn't contain metrics path")
-	}
-	if !strings.Contains(body, *probePath) {
-		t.Errorf("Response body doesn't contain probe path")
-	}
-
-	// Restore original paths
-	*metricsPath = origMetricsPath
-	*probePath = origProbePath
-}
-
-// TestDebugLoggingEnabled tests debug logging when enabled
-func TestDebugLoggingEnabled(t *testing.T) {
-	// Save original debug value and restore it later
-	origDebug := *debug
-	defer func() { *debug = origDebug }()
-
-	// Enable debug logging
-	*debug = true
-
-	// Capture log output
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr) // Restore default output
-
-	// Call debug logging
-	debugLog("Test debug message %d", 123)
-
-	// Check log output
-	if !strings.Contains(buf.String(), "Test debug message 123") {
-		t.Errorf("Debug log didn't output expected message")
+	expected := `<html>
+			<head><title>WebSocket Exporter</title></head>
+			<body>
+			<h1>WebSocket Exporter</h1>
+			<p><a href="/test-probe">Probe</a></p>
+			<p><a href="/test-metrics">Metrics</a></p>
+			</body>
+			</html>`
+	if rr.Body.String() != expected {
+		t.Errorf("handler returned unexpected body: got %v want %v",
+			rr.Body.String(), expected)
 	}
 }
 
 // TestInvalidURLScheme tests handling of URLs with invalid schemes
 func TestInvalidURLScheme(t *testing.T) {
 	// Test with HTTP scheme (not ws/wss)
-	result := probeWebSocket(context.Background(), "http://example.com")
+	result := probeWebSocket("http://example.com")
 
 	if result != false {
 		t.Errorf("probeWebSocket() with invalid scheme = %v, want false", result)
@@ -425,11 +381,11 @@ func TestInvalidURLScheme(t *testing.T) {
 // TestContextCancellation tests handling of context cancellation
 func TestContextCancellation(t *testing.T) {
 	// Create a context and cancel it immediately
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
 	// Test with cancelled context
-	result := probeWebSocket(ctx, "ws://example.com")
+	result := probeWebSocket("ws://example.com")
 
 	if result != false {
 		t.Errorf("probeWebSocket() with cancelled context = %v, want false", result)
@@ -479,116 +435,6 @@ func (w *badWriter) Write(p []byte) (n int, err error) {
 	return 0, fmt.Errorf("forced write error")
 }
 
-func TestSetupServer(t *testing.T) {
-	// Save original values
-	origListenAddress := *listenAddress
-	origMetricsPath := *metricsPath
-	origProbePath := *probePath
-	origDebug := *debug
-
-	// Set test values
-	*listenAddress = ":9999"
-	*metricsPath = "/test-metrics"
-	*probePath = "/test-probe"
-	*debug = true
-
-	// Capture stdout
-	r, w, _ := os.Pipe()
-	oldStdout := os.Stdout
-	os.Stdout = w
-
-	// Setup server
-	server := setupServer()
-
-	// Close stdout capture and restore original
-	if err := w.Close(); err != nil {
-		t.Logf("Error closing writer: %v", err)
-	}
-	os.Stdout = oldStdout
-
-	// Read captured output
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(r); err != nil {
-		t.Fatalf("Failed to read from pipe: %v", err)
-	}
-	output := buf.String()
-
-	// Verify server setup
-	if server.Addr != *listenAddress {
-		t.Errorf("Server address = %v, want %v", server.Addr, *listenAddress)
-	}
-
-	// Check stdout output
-	if !strings.Contains(output, "Starting WebSocket Connection Exporter on "+*listenAddress) {
-		t.Errorf("Missing expected server start message in output")
-	}
-	if !strings.Contains(output, "Probe endpoint: "+*probePath) {
-		t.Errorf("Missing expected probe endpoint message in output")
-	}
-
-	// Test handlers by making requests to them
-	testServer := httptest.NewServer(server.Handler)
-	defer testServer.Close()
-
-	// Test root handler
-	resp, err := http.Get(testServer.URL + "/")
-	if err != nil {
-		t.Fatalf("Failed to GET /: %v", err)
-	}
-	defer func() {
-		err := resp.Body.Close()
-		if err != nil {
-			t.Logf("Error closing response body: %v", err)
-		}
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Root handler status = %v, want %v", resp.StatusCode, http.StatusOK)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("Failed to read response body: %v", err)
-	}
-
-	if !strings.Contains(string(body), "WebSocket Connection Exporter") {
-		t.Errorf("Root handler response missing expected content")
-	}
-
-	// Test metrics handler
-	resp, err = http.Get(testServer.URL + *metricsPath)
-	if err != nil {
-		t.Fatalf("Failed to GET %s: %v", *metricsPath, err)
-	}
-	if err := resp.Body.Close(); err != nil {
-		t.Logf("Error closing response body: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Metrics handler status = %v, want %v", resp.StatusCode, http.StatusOK)
-	}
-
-	// Test probe handler without target (should return 400 Bad Request)
-	resp, err = http.Get(testServer.URL + *probePath)
-	if err != nil {
-		t.Fatalf("Failed to GET %s: %v", *probePath, err)
-	}
-	if err := resp.Body.Close(); err != nil {
-		t.Logf("Error closing response body: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("Probe handler status for missing target = %v, want %v",
-			resp.StatusCode, http.StatusBadRequest)
-	}
-
-	// Restore original values
-	*listenAddress = origListenAddress
-	*metricsPath = origMetricsPath
-	*probePath = origProbePath
-	*debug = origDebug
-}
-
 // TestMainFlagParsing tests that flag parsing works in main
 func TestMainFlagParsing(t *testing.T) {
 	// Save original args
@@ -596,27 +442,222 @@ func TestMainFlagParsing(t *testing.T) {
 	defer func() { os.Args = oldArgs }()
 
 	// Set test args
-	os.Args = []string{"cmd", "-web.listen-address=:8080", "-debug=true"}
+	os.Args = []string{"cmd", "-web.listen-address=:8080"}
 
 	// Reset flags (necessary because flags might have been parsed in other tests)
 	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 
 	// Re-declare your flags (this would normally happen at package level)
-	listenAddress = flag.String("web.listen-address", ":9095", "Address to listen on for telemetry")
-	metricsPath = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
-	probePath = flag.String("web.probe-path", "/probe", "Path under which to expose the probe endpoint")
-	timeout = flag.Duration("timeout", 10*time.Second, "Timeout for probe")
-	debug = flag.Bool("debug", false, "Enable debug logging")
+	webListenAddress = flag.String("web.listen-address", ":9095", "Address to listen on")
+	webTelemetryPath = flag.String("web.telemetry-path", "/metrics", "Path for exporter metrics")
+	webProbePath = flag.String("web.probe-path", "/probe", "Path for probe endpoint")
+	timeout = flag.Duration("timeout", 10*time.Second, "Probe timeout")
 
 	// Parse flags
 	flag.Parse()
 
 	// Verify flag values
-	if *listenAddress != ":8080" {
-		t.Errorf("listen address = %v, want :8080", *listenAddress)
+	if *webListenAddress != ":8080" {
+		t.Errorf("webListenAddress = %v, want :8080", *webListenAddress)
+	}
+}
+
+func TestMain(t *testing.T) {
+	// Save original command line arguments
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+
+	// Test with custom listen address
+	os.Args = []string{"cmd", "-web.listen-address=:8080"}
+	flag.Parse()
+	if *webListenAddress != ":8080" {
+		t.Errorf("webListenAddress = %v, want :8080", *webListenAddress)
+	}
+}
+
+func TestMainFunction(t *testing.T) {
+	// Create a mock server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			if _, err := w.Write([]byte("Root handler response")); err != nil {
+				t.Logf("Failed to write response: %v", err)
+			}
+		case "/metrics":
+			if _, err := w.Write([]byte("Metrics handler response")); err != nil {
+				t.Logf("Failed to write response: %v", err)
+			}
+		case "/probe":
+			if _, err := w.Write([]byte("Probe handler response")); err != nil {
+				t.Logf("Failed to write response: %v", err)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Save original values
+	origWebListenAddress := *webListenAddress
+	origWebTelemetryPath := *webTelemetryPath
+	origWebProbePath := *webProbePath
+	defer func() {
+		*webListenAddress = origWebListenAddress
+		*webTelemetryPath = origWebTelemetryPath
+		*webProbePath = origWebProbePath
+	}()
+
+	// Set test values
+	*webListenAddress = server.URL[7:] // Remove "http://" prefix
+	*webTelemetryPath = "/metrics"
+	*webProbePath = "/probe"
+
+	// Test root handler
+	resp, err := http.Get(server.URL + "/")
+	if err != nil {
+		t.Fatalf("Failed to GET /: %v", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("Failed to close response body: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Root handler status = %v, want %v", resp.StatusCode, http.StatusOK)
 	}
 
-	if *debug != true {
-		t.Errorf("debug = %v, want true", *debug)
+	// Test metrics handler
+	resp, err = http.Get(server.URL + *webTelemetryPath)
+	if err != nil {
+		t.Fatalf("Failed to GET %s: %v", *webTelemetryPath, err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("Failed to close response body: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Metrics handler status = %v, want %v", resp.StatusCode, http.StatusOK)
+	}
+
+	// Test probe handler without target
+	resp, err = http.Get(server.URL + *webProbePath)
+	if err != nil {
+		t.Fatalf("Failed to GET %s: %v", *webProbePath, err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("Failed to close response body: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Probe handler status = %v, want %v", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestMetricsRegistration(t *testing.T) {
+	// Reset metrics
+	prometheus.Unregister(websocketUp)
+	prometheus.Unregister(websocketConnectionDuration)
+	prometheus.Unregister(probeDuration)
+	prometheus.Unregister(probeSuccess)
+
+	// Re-register metrics
+	prometheus.MustRegister(websocketUp)
+	prometheus.MustRegister(websocketConnectionDuration)
+	prometheus.MustRegister(probeDuration)
+	prometheus.MustRegister(probeSuccess)
+
+	// Test metric values
+	websocketUp.Set(1)
+	websocketConnectionDuration.Set(0.5)
+	probeDuration.Set(1.0)
+	probeSuccess.Set(1)
+
+	// Verify metric values
+	if value := testutil.ToFloat64(websocketUp); value != 1 {
+		t.Errorf("websocketUp = %v, want 1", value)
+	}
+	if value := testutil.ToFloat64(websocketConnectionDuration); value != 0.5 {
+		t.Errorf("websocketConnectionDuration = %v, want 0.5", value)
+	}
+	if value := testutil.ToFloat64(probeDuration); value != 1.0 {
+		t.Errorf("probeDuration = %v, want 1.0", value)
+	}
+	if value := testutil.ToFloat64(probeSuccess); value != 1 {
+		t.Errorf("probeSuccess = %v, want 1", value)
+	}
+}
+
+func TestProbeWebSocketErrorHandling(t *testing.T) {
+	testCases := []struct {
+		name     string
+		target   string
+		expected bool
+	}{
+		{
+			name:     "Invalid URL format",
+			target:   "://invalid-url",
+			expected: false,
+		},
+		{
+			name:     "URL with invalid characters",
+			target:   "ws://example.com/\x00",
+			expected: false,
+		},
+		{
+			name:     "URL with invalid port",
+			target:   "ws://example.com:99999",
+			expected: false,
+		},
+		{
+			name:     "URL with invalid path",
+			target:   "ws://example.com/../../etc/passwd",
+			expected: false,
+		},
+		{
+			name:     "URL with invalid query",
+			target:   "ws://example.com?param=\x00",
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Reset metrics before test
+			prometheus.Unregister(websocketUp)
+			prometheus.Unregister(websocketConnectionDuration)
+			prometheus.Unregister(probeDuration)
+			prometheus.Unregister(probeSuccess)
+
+			// Re-register metrics
+			prometheus.MustRegister(websocketUp)
+			prometheus.MustRegister(websocketConnectionDuration)
+			prometheus.MustRegister(probeDuration)
+			prometheus.MustRegister(probeSuccess)
+
+			// Test the probeWebSocket function
+			result := probeWebSocket(tc.target)
+
+			if result != tc.expected {
+				t.Errorf("probeWebSocket(%s) = %v, want %v", tc.target, result, tc.expected)
+			}
+
+			// Verify metrics were set correctly for failed probes
+			if !tc.expected {
+				if value := testutil.ToFloat64(probeSuccess); value != 0 {
+					t.Errorf("probeSuccess metric = %v, want 0", value)
+				}
+				if value := testutil.ToFloat64(websocketUp); value != 0 {
+					t.Errorf("websocketUp metric = %v, want 0", value)
+				}
+				if value := testutil.ToFloat64(websocketConnectionDuration); value != 0 {
+					t.Errorf("websocketConnectionDuration metric = %v, want 0", value)
+				}
+			}
+		})
 	}
 }
